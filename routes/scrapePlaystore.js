@@ -122,7 +122,7 @@ router.post('/scrape-playstore', async (req, res) => {
       count: filteredReviews.length,
       appwriteFileId: appwriteFileId,
       appwriteUrl: appwriteUrl,
-      preview: filteredReviews.slice(0, 10), // First 10 rows for preview
+      preview: filteredReviews,
       stats: stats
     });
 
