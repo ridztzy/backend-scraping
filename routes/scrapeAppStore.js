@@ -1,31 +1,31 @@
 const express = require('express');
 const router = express.Router();
-const gplay = require('google-play-scraper').default || require('google-play-scraper');
+const store = require('app-store-scraper');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const appwriteStorage = require('../lib/appwriteStorage');
 
 /**
- * POST /api/scrape-playstore
- * Scrape reviews from Google Play Store
+ * POST /api/scrape-appstore
+ * Scrape reviews from Apple App Store
  * 
  * Request body (MATCH FRONTEND):
  * {
- *   "appId": "com.whatsapp",
+ *   "appId": "310633997",  // Numeric ID for iOS
  *   "limit": 100,
- *   "sort": "newest" | "rating" | "helpful",
- *   "rating": "all" | "1" | "2" | "3" | "4" | "5",
+ *   "sort": "mostRecent" | "mostHelpful",
+ *   "country": "id",
  *   "lang": "id"
  * }
  */
-router.post('/scrape-playstore', async (req, res) => {
+router.post('/scrape-appstore', async (req, res) => {
   try {
     const { 
       appId, 
       limit = 100, 
-      sort = 'newest',
-      rating = 'all',
+      sort = 'mostRecent',
+      country = 'id',
       lang = 'id'
     } = req.body;
 
@@ -37,61 +37,55 @@ router.post('/scrape-playstore', async (req, res) => {
       });
     }
 
-    console.log(`📱 Scraping Play Store: ${appId}`);
-    console.log(`📊 Limit: ${limit}, Sort: ${sort}, Rating: ${rating}, Lang: ${lang}`);
+    console.log(`🍎 Scraping App Store: ${appId}`);
+    console.log(`📊 Limit: ${limit}, Sort: ${sort}, Country: ${country}, Lang: ${lang}`);
 
-    // Convert sort string to number (for google-play-scraper)
+    // Convert sort string to app-store-scraper format
     const sortMap = {
-      'newest': 1,
-      'rating': 2,
-      'helpful': 3
+      'mostRecent': store.sort.RECENT,
+      'mostHelpful': store.sort.HELPFUL
     };
-    const sortNumber = sortMap[sort] || 1;
-
-    // Convert rating string to number
-    const starsFilter = rating === 'all' ? 0 : parseInt(rating);
+    const sortValue = sortMap[sort] || store.sort.RECENT;
 
     // Get app details
-    const appDetails = await gplay.app({ appId, lang });
-
-    // Scrape reviews
-    const reviewsData = await gplay.reviews({
-      appId,
-      sort: sortNumber,
-      num: parseInt(limit),
-      lang: lang,
-      country: lang === 'id' ? 'id' : 'us'
+    const appDetails = await store.app({ 
+      id: appId, 
+      country: country 
     });
 
-    // Transform reviews
-    const reviews = reviewsData.data.map((review, index) => ({
+    // Scrape reviews
+    const reviews = await store.reviews({
+      id: appId,
+      sort: sortValue,
+      page: 1,
+      country: country
+    });
+
+    // Get up to limit reviews
+    const limitedReviews = reviews.slice(0, parseInt(limit));
+
+    // Transform reviews to match format
+    const transformedReviews = limitedReviews.map((review, index) => ({
       id: review.id || `review-${index}`,
       userName: review.userName,
-      userImage: review.userImage,
       date: review.date,
       rating: review.score,
       reviewText: review.text,
-      replyDate: review.replyDate || '',
-      replyText: review.replyText || '',
-      thumbsUp: review.thumbsUp || 0,
-      version: review.version || ''
+      title: review.title || '',
+      version: review.version || '',
+      thumbsUp: 0  // App Store doesn't have thumbsUp
     }));
 
-    // Filter by rating if not 'all'
-    const filteredReviews = starsFilter === 0 
-      ? reviews 
-      : reviews.filter(r => r.rating === starsFilter);
-
-    console.log(`✅ Scraped ${filteredReviews.length} reviews (filtered from ${reviews.length})`);
+    console.log(`✅ Scraped ${transformedReviews.length} reviews`);
 
     // Calculate stats
-    const stats = calculateStats(filteredReviews);
+    const stats = calculateStats(transformedReviews);
 
     // Generate jobId
     const jobId = uuidv4();
 
     // Generate CSV
-    const csvPath = await generateCSV(filteredReviews, appDetails, jobId);
+    const csvPath = await generateCSV(transformedReviews, appDetails, jobId);
     console.log(`📄 CSV generated: ${csvPath}`);
 
     // Upload to Appwrite (if enabled)
@@ -102,7 +96,7 @@ router.post('/scrape-playstore', async (req, res) => {
       try {
         const uploadResult = await appwriteStorage.uploadCSV(
           csvPath,
-          `playstore-${appId}-${jobId}.csv`
+          `appstore-${appId}-${jobId}.csv`
         );
         appwriteFileId = uploadResult.fileId;
         appwriteUrl = uploadResult.downloadUrl;
@@ -118,18 +112,18 @@ router.post('/scrape-playstore', async (req, res) => {
     res.json({
       ok: true,
       jobId: jobId,
-      count: filteredReviews.length,
+      count: transformedReviews.length,
       appwriteFileId: appwriteFileId,
       appwriteUrl: appwriteUrl,
-      preview: filteredReviews,
+      preview: transformedReviews.slice(0, 10), // First 10 rows for preview
       stats: stats
     });
 
   } catch (error) {
-    console.error('❌ Error scraping Play Store:', error);
+    console.error('❌ Error scraping App Store:', error);
     res.status(500).json({
       ok: false,
-      error: 'Failed to scrape Play Store',
+      error: 'Failed to scrape App Store',
       message: error.message
     });
   }
@@ -175,7 +169,7 @@ async function generateCSV(reviews, appInfo, jobId) {
     fs.mkdirSync(tmpDir, { recursive: true });
   }
 
-  const filename = `playstore-${appInfo.appId}-${jobId}.csv`;
+  const filename = `appstore-${appInfo.id}-${jobId}.csv`;
   const filepath = path.join(tmpDir, filename);
 
   // CSV headers
@@ -185,11 +179,9 @@ async function generateCSV(reviews, appInfo, jobId) {
     'User Name',
     'Date',
     'Rating',
+    'Review Title',
     'Review Text',
-    'Thumbs Up',
-    'Version',
-    'Reply Date',
-    'Reply Text'
+    'Version'
   ];
 
   // Create CSV content
@@ -198,15 +190,13 @@ async function generateCSV(reviews, appInfo, jobId) {
   reviews.forEach(review => {
     const row = [
       escapeCSV(appInfo.title),
-      escapeCSV(appInfo.appId),
+      escapeCSV(appInfo.id),
       escapeCSV(review.userName),
       escapeCSV(review.date),
       review.rating,
+      escapeCSV(review.title || ''),
       escapeCSV(review.reviewText),
-      review.thumbsUp || 0,
-      escapeCSV(review.version || ''),
-      escapeCSV(review.replyDate || ''),
-      escapeCSV(review.replyText || '')
+      escapeCSV(review.version || '')
     ];
     csvContent += row.join(',') + '\n';
   });

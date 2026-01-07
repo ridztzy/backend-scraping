@@ -12,9 +12,14 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes - HANYA Play Store (Twitter belum ada di frontend)
+// Routes - Play Store & App Store scraping
 app.use('/api', require('./routes/scrapePlaystore'));
+app.use('/api', require('./routes/scrapeAppStore'));
 // app.use('/api', require('./routes/scrapeTwitter')); // TODO: Uncomment when frontend ready
+
+// Sentiment Analysis routes
+app.use('/api/sentiment', require('./routes/sentiment'));
+app.use('/api', require('./routes/predict'));
 
 
 // Health check
@@ -31,11 +36,21 @@ app.get('/api/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     message: 'Scraping Backend API',
-    endpoints: [
-      'POST /api/scrape-playstore',
-      'GET /api/health'
-    ],
-    note: 'Twitter endpoint coming soon (when frontend ready)',
+    categories: {
+      scraping: [
+        'POST /api/scrape-playstore',
+        'POST /api/scrape-appstore'
+      ],
+      sentiment: [
+        'POST /api/sentiment/analyze',
+        'POST /api/sentiment/reviews',
+        'POST /api/predict'
+      ],
+      utility: [
+        'GET /api/health'
+      ]
+    },
+    note: 'Twitter endpoint coming soon',
     appwriteEnabled: process.env.ENABLE_APPWRITE === 'true'
   });
 });
